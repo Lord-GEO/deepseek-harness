@@ -102,6 +102,22 @@ describe('installer preparation preserves application dependencies', () => {
     expect(config.artifactName).toBe('deepseek-harness-${version}-${os}-${arch}-unsigned.${ext}')
   })
 
+  it('omits both update services from local unsigned Windows packages', async () => {
+    const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
+    const environment = { DSH_DESKTOP_APP_ID: 'com.deepseek.harness',
+      DSH_DESKTOP_TARGET_PLATFORM: 'win32', DSH_DESKTOP_TARGET_ARCH: 'x64',
+      DSH_DESKTOP_UNSIGNED: '1', DSH_DESKTOP_LOCAL_BUILD: '1',
+      DSH_DESKTOP_MANDATORY_UPDATE_CONFIG: 'invalid-release-policy' }
+    const config = createElectronBuilderConfig(environment, 'win32', 'x64')
+    expect(config.extraMetadata).not.toHaveProperty('dshMandatoryUpdatePolicy')
+    expect(config.publish).toBeNull()
+    expect(config.artifactName).toContain('-unsigned.')
+    expect(() => createElectronBuilderConfig({ ...environment, DSH_DESKTOP_UNSIGNED: '0' }, 'win32', 'x64'))
+      .toThrow('local builds require --unsigned')
+    expect(() => createElectronBuilderConfig({ ...environment, DSH_DESKTOP_LOCAL_BUILD: '0' }, 'win32', 'x64'))
+      .toThrow('DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN')
+  })
+
   it('packages every preload entry point the shell loads', async () => {
     const { readdirSync, readFileSync } = await import('node:fs')
     const sourceDirectory = new URL('../src/', import.meta.url)

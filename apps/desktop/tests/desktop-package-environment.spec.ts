@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { loadDesktopPackageEnvironment, localMacOSPackageEnvironment, validateDesktopPackageEnvironment } from '../scripts/desktop-package-environment.mjs'
+import { loadDesktopPackageEnvironment, localUnsignedPackageEnvironment, validateDesktopPackageEnvironment } from '../scripts/desktop-package-environment.mjs'
 import { resolveWindowsPackageSettings } from '../scripts/windows-package-settings.mjs'
 
 const WINDOWS = { platform: 'win32', arch: 'x64' } as const
@@ -106,12 +106,13 @@ describe('Desktop local packaging configuration', () => {
     const parent = {
       PATH: 'build-tools', HTTPS_PROXY: 'http://proxy.example:8080', DSH_DESKTOP_NPM_REGISTRY: 'https://registry.npmmirror.com',
       DSH_DESKTOP_APP_ID: 'com.example.release', DSH_DESKTOP_UNSIGNED: '0',
+      DSH_DESKTOP_LOCAL_BUILD: '1',
       DSH_DESKTOP_AUTO_UPDATE_ENV: 'production', DSH_DESKTOP_MANDATORY_UPDATE_CONFIG: 'invalid-json',
       DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN: 'https://policy.example.com',
       DSH_DESKTOP_MACOS_SIGNING_IDENTITY: 'Release identity', CSC_LINK: 'missing.p12',
       APPLE_API_KEY: 'missing.p8', DOWNLOAD_PROD_COS_SECRET_KEY: 'unused-secret',
     }
-    const local = localMacOSPackageEnvironment(parent)
+    const local = localUnsignedPackageEnvironment(parent)
     expect(local).toEqual({
       PATH: parent.PATH, HTTPS_PROXY: parent.HTTPS_PROXY, DSH_DESKTOP_NPM_REGISTRY: parent.DSH_DESKTOP_NPM_REGISTRY,
       DSH_DESKTOP_APP_ID: 'com.deepseek.harness', DSH_DESKTOP_UNSIGNED: '1',
@@ -129,6 +130,22 @@ describe('Desktop local packaging configuration', () => {
       await writeFile(join(directory, '.env.windows'), 'DSH_DESKTOP_WINDOWS_SIGNATURE_CACHE_CONCURRENCY=2\n')
       expect(resolveWindowsPackageSettings(loadDesktopPackageEnvironment('win32', parent, directory)).signatureCacheConcurrency).toBe(2)
     })
+  })
+
+  it('omits Windows policy validation only in explicitly local unsigned builds', () => {
+    const environment = { ...localUnsignedPackageEnvironment({}), DSH_DESKTOP_LOCAL_BUILD: '1' }
+    expect(() => { validateDesktopPackageEnvironment(environment, WINDOWS, { unsigned: true }) }).not.toThrow()
+    expect(() => { validateDesktopPackageEnvironment(environment, WINDOWS) }).toThrow('local builds require --unsigned')
+    expect(() => { validateDesktopPackageEnvironment(environment, WINDOWS, { prepareOnly: true }) })
+      .toThrow('local builds require --unsigned')
+    expect(() => { validateDesktopPackageEnvironment(localUnsignedPackageEnvironment({}), WINDOWS, { unsigned: true }) })
+      .toThrow('DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN')
+  })
+
+  it.each(['', 'true', '2'])('rejects invalid local build flags %j', (value) => {
+    expect(() => {
+      validateDesktopPackageEnvironment({ DSH_DESKTOP_LOCAL_BUILD: value }, WINDOWS, { unsigned: true })
+    }).toThrow('DSH_DESKTOP_LOCAL_BUILD must be 0 or 1')
   })
 
   it('takes pack concurrency from the Windows file without inheriting ambient tuning', async () => {
@@ -257,7 +274,7 @@ describe('Desktop local packaging configuration', () => {
   })
 
   it('accepts unsigned macOS configuration without Apple or update policy settings while keeping release validation', () => {
-    const local = localMacOSPackageEnvironment({})
+    const local = localUnsignedPackageEnvironment({})
     expect(() => { validateDesktopPackageEnvironment(local, MACOS, { unsigned: true }) }).not.toThrow()
     expect(() => { validateDesktopPackageEnvironment(local, MACOS) })
       .toThrow('DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN')

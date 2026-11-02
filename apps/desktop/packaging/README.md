@@ -155,7 +155,15 @@ On Windows x64, use the complete unsigned packaging command for local installati
 pnpm run package:desktop:win:x64:unsigned
 ```
 
-The command reads `.env.windows` and requires `DSH_DESKTOP_APP_ID` and the [mandatory-update policy settings](../README.md#mandatory-update-policy), including a real HTTPS service origin. The local run and CI use Node 24; the remaining tools are the root `packageManager` version of pnpm, Git, PowerShell 7 (`pwsh`), tar, Python, Visual C++ Build Tools and a Windows SDK. Set `PYTHON` when Python is absent from `PATH`. It writes the installer to `.desktop-build/targets/win-x64/unsigned-artifacts/`, omits ordinary automatic-update configuration, strips signing credentials, and creates no release completion record. EV and upload credentials are unnecessary. Signed packaging and upload retain their release requirements.
+Without `--local`, the command reads `.env.windows` and requires `DSH_DESKTOP_APP_ID` and the [mandatory-update policy settings](../README.md#mandatory-update-policy), including a real HTTPS service origin. The local run and CI use Node 24; the remaining tools are the root `packageManager` version of pnpm, Git, PowerShell 7 (`pwsh`), tar, Python, Visual C++ Build Tools and a Windows SDK. Set `PYTHON` when Python is absent from `PATH`. It writes the installer to `.desktop-build/targets/win-x64/unsigned-artifacts/`, omits ordinary automatic-update configuration, strips signing credentials, and creates no release completion record. EV and upload credentials are unnecessary. Signed packaging and upload retain their release requirements.
+
+For a local installer without update services, use:
+
+```sh
+pnpm run package:desktop:win:x64:unsigned --local
+```
+
+`--local` requires `--unsigned`, ignores dotenv files, machine presets and inherited release settings, and uses `com.deepseek.harness` as the application ID. The installer omits both automatic and mandatory updates. Build tools, standard network proxies and `DSH_DESKTOP_NPM_REGISTRY` remain available from the shell. Add `--check` to validate configuration and tooling without building, or `--dir` to produce an unpacked application directory.
 
 Run `pnpm install --frozen-lockfile`, then `pnpm run package:desktop:win:x64:unsigned --check` to validate configuration and tooling before the full command above. Packaging performs its own complete build and isolated runtime smoke without an online model. Stage logs remain under `.desktop-build/packaging-runs/`; a successful build alone does not qualify the installer. Dependency installation and runtime preparation need access to npm, GitHub release assets and nodejs.org; use the existing registry and proxy configuration when the network requires it. Caches and tool locations belong to the build machine, not tracked personal paths.
 
