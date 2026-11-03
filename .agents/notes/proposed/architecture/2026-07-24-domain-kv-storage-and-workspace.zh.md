@@ -11,9 +11,9 @@ host 侧唯一的持久化面是 session 事件日志（`packages/session/sessio
 - **workspace 实体**。GUI 要把 workspace 做成真实对象：路径、标题、关联 session 清单。归属关系由 workspace 持有——"哪些 session 属于这个 workspace"不是任何单个 session 自己的事实，塞进 session log 语义不成立。在本设计之前，workspace 只是 sidebar 上按 cwd 分组的视觉概念，没有实体。
 - **session 动态元信息**（可预见的第二个消费方）。冷会话列表只读日志首行 header（创建时的不可变快照），title、结束状态这类随会话推进变化的信息拿不到；补齐方向是 sidecar 元数据表——正是一张按 key 高频点更新的 KV 表。
 
-另外，Session 删除需要 `SessionPersistence` 删除原语和 `session.delete` 端点。该空白的设计随本 Note 定案，但实现仍属未来工作。
+Session 删除的存储操作、API 与 GUI 由[永久 Session 删除决策](../../implemented/feature/2026-11-04-permanent-session-deletion.zh.md)拥有。
 
-[Workspace 参考](../../../../packages/workspace/workspace/README.zh.md)定义非破坏性的注册记录移除：删除 Workspace 注册记录会保留相关 Session 及其日志，Session 删除仍是独立的未来工作。因此，下文的级联设计并不是 Workspace GUI 的删除语义。
+[Workspace 参考](../../../../packages/workspace/workspace/README.zh.md)定义非破坏性的注册记录移除：删除 Workspace 注册记录会保留相关 Session 及其日志，Session 删除是独立操作，不属于 Workspace GUI 的删除语义。
 
 ## 方案
 
@@ -26,12 +26,12 @@ host 侧唯一的持久化面是 session 事件日志（`packages/session/sessio
 | `@deepseek-ai/dsh-storage-sqlite` | `packages/storage/storage-sqlite/` | 注册后端 `sqlite` | ✓ |
 | `@deepseek-ai/dsh-storage-domain` | `packages/storage/storage-domain/` | 挂载 `ctx.storage.domain` | ✓ |
 | `@deepseek-ai/dsh-workspace` | `packages/workspace/workspace/` | `ctx.workspaceRegistry` | ✓ |
-| `SessionPersistence.delete` 扩面 + 级联删编排 | `packages/session/*` | 既有 seam 新方法 | ✗ future work（本期不动 session 侧） |
+| Session 删除与后代编排 | `packages/session/*`、`packages/api/session-controller` | `deleteMany`、`session.delete` | 由[独立删除决策](../../implemented/feature/2026-11-04-permanent-session-deletion.zh.md)拥有 |
 | `workspace.*` / `session.delete` RPC、GUI 接线、boot 组装 | — | — | ✗ 下期 |
 
 （workspace 放独立组不放 `packages/host/`：host 组命名规则要求 `dsh-host-*` 前缀，而包名定为 `dsh-workspace`；且 workspace 实体是领域概念，不绑定 host 装配层。与既有 `agent-instructions` 包无关——那是 AGENTS.md 指令加载器。）
 
-依赖方向：`dsh-workspace` → `dsh-domain` → `dsh-storage` ← 两后端。`dsh-workspace` 另依赖 `ctx.sessionPersistence` 的只读面（attach 的 cwd 校验读 session header；服务缺席时 attach 直接拒绝——无法校验即不写账）。session 删除相关的 `ctx.sessions` 运行中检查随级联删一并归入 future work。
+依赖方向：`dsh-workspace` → `dsh-domain` → `dsh-storage` ← 两后端。`dsh-workspace` 另依赖 `ctx.sessionPersistence` 的只读面（attach 的 cwd 校验读 session header；服务缺席时 attach 直接拒绝——无法校验即不写账）。Session 删除的运行时所有权与活动检查由独立删除决策拥有。
 
 ### `dsh-storage`：存储枢纽
 
@@ -162,34 +162,9 @@ export interface KvTable<K extends string, V> {
 - **版本兼容**：领域拥有方通过 `compatibleVersions` 声明可读的旧版本，并用当前 schema 解码历史值。Storage 不转换记录值；[领域版本](../../../../docs/subsystems/storage.zh.md#domain-versioning)定义版本戳发布和混合代际要求。
 - **变更事件**：每次写落盘 resolve 后 emit `domain/changed`（`@mode emit`），逐条发、不带旧值（对齐仓库"新快照 + 操作判别"惯例，范本 `goal/changed`）；payload `DomainChanged` 是 put/deleted 判别联合——域名 + 表名 + key（global 变更两者为 `''`）+ operation，put 支带新快照 value、deleted 支无 value（`packages/storage/storage-domain/src/events.ts`）。此为下期 RPC 推帧的事件源。错误词汇 `DomainError`，码表：`already-open` / `facet-unsupported` / `invalid-record`（带 `{ table, key }`）/ `missing-key` / `closed`。
 
-### Future work：session 侧删除（设计定案，本期不实施）
+### Session 删除
 
-本节是定案的施工规范，实施期不动语义只动代码；本期 session-persistence 的任何文件都不修改。
-
-```ts ignore-check
-export abstract class SessionPersistence extends Service {
-  /**
-   * Permanently delete one session's stored log.
-   * Queued on the per-id write chain (serialized with in-flight appends).
-   * Unknown id → reject; un-materialized create intent → cancel it and resolve.
-   * After deletion the id behaves as unknown for every subsequent operation.
-   */
-  abstract delete(id: SessionId): Promise<void>
-}
-```
-
-- JSONL 后端：unlink 该 session 文件（含 `.zstd` 变体）；文件与 intent 均无 → reject。
-- 仓库外后端在自己的介质中原子删除，并保留相同的未知 id 与已取消 intent 结果；本提案不定义其他 first-party 物理路径。
-- 删除成功后 emit `'session-persistence/deleted'(id: SessionId)`（`@mode emit`；session-persistence 层事件面，与 `domain/changed` 无关）。派生数据（session-query 全文索引等）订阅自清；持久层不直连索引，崩溃窗口靠派生索引可丢弃重建兜底。
-
-编排层规则（随级联删一起实施；`session.delete` RPC 与 workspace 级联复用同一规则）：
-
-| 检查（按序） | 不满足时 |
-| --- | --- |
-| 目标（递归时含整棵子树）无一在 `ctx.sessions` 运行 | throw，什么都不删；调用方先 cancel 再删，持久层不反向牵动运行时 |
-| 非递归时目标无后代（后代 = `parentSessionId` 传递闭包，由 `list()` header 求得） | throw：默认只能删叶子，`recursive: true` 显式递归 |
-| 递归序自底向上（叶→根） | ——中途崩溃只留"子树删一半、祖先在"，重跑收敛，任何时刻无悬空 parent |
-| 级联中某 id 已不在盘上 | 跳过（幂等续删）；其余错误中止 |
+会话删除由[永久 Session 删除决策](../../implemented/feature/2026-11-04-permanent-session-deletion.zh.md)拥有；本提案的其余存储迁移决策保持独立。
 
 ### `dsh-workspace`
 
@@ -244,7 +219,7 @@ export class WorkspaceRegistry extends Service {
 - **path 规范**：落盘值 = `fs.realpath(输入)`（尾斜杠、`..`、符号链接全解析）；唯一性 = 规范化后字符串相等（符号链接指向同一目录算撞）。目录不存在时 create 直接 reject（realpath 失败——workspace 必须指向存在目录；"Create new = 建目录"是上层交互，先 mkdir 再 create）。attach 校验的 session cwd 同口径。cwd 单值 + path 唯一 ⇒ 一个 session 结构上最多归属一个 workspace，双重记账写侧不可能。
 - **title**：显示名，默认 `basename(path)`，可改，允许重复。归属不用 cwd 派生兜底——cwd 表达不了排序，归属是 workspace 侧事实；headless 直开的 session 不属于任何 workspace。
 - 消费方只见 `Workspace` 接口，`WorkspaceEntity` 不出包（单实现不预拆 seam）；实体按 id 唯一（注册表缓存），记录快照写后原地换新，外部只见 getter；所有写收敛到实体内 `mutate(fn)` → `table.update`，`updatedAt` 在 mutate 内统一刷。领域对象不过 RPC，下期 wire 层把记录投影成 zod wire schema。
-- **Session 删除仍属未来工作。** [Workspace 注册表](../../../../packages/workspace/workspace/README.zh.md)将 `ctx.workspaceRegistry.delete(id)` 作为仅删除元数据、保留 Session 与日志的操作交付。递归删除 Session、运行中检查和崩溃重跑收敛属于独立的 `session.delete` 能力。
+- **Session 删除独立于 Workspace 移除。** [永久删除决策](../../implemented/feature/2026-11-04-permanent-session-deletion.zh.md)拥有后代编排、活动检查与部分失败语义；Workspace 注册记录删除保留会话历史。
 
 一致性口径（账 = 归属唯一依据；实现与测试基准）：
 
@@ -286,7 +261,6 @@ export class WorkspaceRegistry extends Service {
 
 | 不做 | 触发条件 | 返工点 | 预埋 |
 | --- | --- | --- | --- |
-| Session 删除（`SessionPersistence.delete`、deleted 事件、递归删除、运行中检查） | 破坏性的 Session 删除产品流启动 | 实现 Session 原语及 `session.delete`；与 Workspace 注册记录删除保持独立 | 上文编排规则和拒绝清单仍是基础；Workspace 删除会保留 Session 与日志 |
 | `log` facet 与 Session provider 迁移 | 本期后任意期启动 | 有真实 consumer 证明需要时下沉 JSONL 介质操作 | facet 组织保留选项，但不承诺提取 |
 | 多进程并发写保护 | 两 host 进程同写一介质 | JSON 后端文件锁；SQLite WAL 天然多进程 | 写全经 domain 单点串行，加锁只动后端 |
 | 跨进程变更观测 | GUI 断线重连感知 | revision 模式（抄 session-persistence） | 进程内已有 `domain/changed` |
@@ -297,7 +271,6 @@ export class WorkspaceRegistry extends Service {
 | 跨表原子事务 | 同域两表一次原子操作需求 | `domain.transact(fn)`；JSON 天然原子，SQLite 包事务 | — |
 | 二级索引/条件查询 | 内存过滤不动（万级记录） | SQLite JSON1 查 value 列，加只读 query 面 | JSON 后端不陪跑 |
 | session 跨 workspace 移动 | 产品需求出现 | attach 校验放宽为"先 detach 后 attach"编排 | — |
-| Session 删除 RPC／GUI | 破坏性的 Session 删除产品流启动 | `session.delete` 端点、wire schema 与明确的确认 UI | Workspace RPC／GUI 已独立交付，不再存在级联耦合 |
 
 ## 备选方案
 

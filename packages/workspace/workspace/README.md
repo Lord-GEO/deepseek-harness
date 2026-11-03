@@ -25,6 +25,8 @@ Use this package to keep an ordered, persistent list of project directories and 
 <a id="use-this-package"></a>
 ## Use this package
 
+`forgetSession(id)` removes a deleted Session from Workspace accounts, global archive and pin sets, and cached headers. The caller removes the runtime and log first. Cleanup is durable and repeatable after partial failure; it never removes a Workspace or project files.
+
 Use this package to give the product a project list: named directories the user works in, the sessions that ran in each, a stable order, and a way to hide sessions without losing them or bring them back. The API contracts behind each action live in the implementation section.
 
 ### When to use it

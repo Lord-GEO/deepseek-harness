@@ -343,6 +343,17 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     )
   }
 
+  override async forgetSession(id: SessionId): Promise<void> {
+    await super.forgetSession(id)
+    await this._serialized(undefined, () => {
+      if (this._db === undefined) return
+      this._deleteSession('persisted', id)
+      this._deleteSession('live', id)
+      this._db.exec('UPDATE search_state SET global_generation = global_generation + 1 WHERE singleton = 1')
+      this._globalGeneration += 1
+    })
+  }
+
   private async _close(): Promise<void> {
     this._closed = true
     await this._tail
@@ -380,7 +391,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     }
   }
 
-  private async _serialized<T>(signal: AbortSignal | undefined, operation: () => Promise<T>): Promise<T> {
+  private async _serialized<T>(signal: AbortSignal | undefined, operation: () => T | Promise<T>): Promise<T> {
     if (this._isClosed()) throw indexClosed()
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })

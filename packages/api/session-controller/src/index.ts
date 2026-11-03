@@ -10,6 +10,7 @@ import { errorChain, ReasoningEffortId, type MessageSource } from '@deepseek-ai/
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionAlreadyOwnedError, SessionDeletionError } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService, principalOf, type TypertResourceResolveInput } from '@deepseek-ai/dsh-typert-protocol'
@@ -42,6 +43,8 @@ import type {
   SessionControlFrame,
   SessionCreateRequest,
   SessionCreateValue,
+  SessionDeleteRequest,
+  SessionDeleteValue,
   SessionFollowFrame,
   SessionFollowRequest,
   SessionForkRequest,
@@ -433,6 +436,95 @@ export class SessionController extends TypertRemoteService {
   @Remote('rename')
   rename(request: SessionRenameRequest): Promise<SessionRenameValue> {
     return this.commands.rename(request)
+  }
+
+  /**
+   * Permanently delete an inactive ordinary Session and its subagent descendants.
+   * Independent forks and shared attachments are retained. A failure after a
+   * descendant was removed reports those identities and can be retried.
+   * @param request - ordinary Session whose history is removed after confirmation.
+   * @returns deleted identities, with descendants before their parent.
+   */
+  @Remote('delete')
+  async delete(request: SessionDeleteRequest): Promise<SessionDeleteValue> {
+    const persistence = this.ctx.get('sessionPersistence')
+    if (persistence === undefined) {
+      throw new RemoteError('session/delete-failed', 'Session storage is unavailable', {
+        sessionId: request.sessionId, deletedSessionIds: [],
+      })
+    }
+    const records = await this.ctx.sessionQuery.listSessions()
+    const root = records.find(record => record.header.id === request.sessionId)
+    if (root?.header.origin === 'subagent') {
+      throw new RemoteError('session/agent-busy', 'Delete subagent history through its parent Session', {
+        reason: 'delete the ordinary parent Session',
+      })
+    }
+    const ids: SessionId[] = [request.sessionId]
+    const selected = new Set(ids)
+    for (let index = 0; index < ids.length; index++) {
+      for (const { header } of records) {
+        if (header.origin !== 'subagent' || header.parentSession !== ids[index] || selected.has(header.id)) continue
+        selected.add(header.id)
+        ids.push(header.id)
+      }
+    }
+    for (const sessionId of new Set([...ids, ...request.cleanupSessionIds ?? []])) {
+      if (!this.ctx.remoteAccess.allows({ kind: 'session', id: sessionId })) {
+        throw new RemoteError('session/delete-denied', 'Deleting a related Session is not allowed', { sessionId })
+      }
+    }
+    for (const sessionId of request.cleanupSessionIds ?? []) {
+      if (selected.has(sessionId)) continue
+      if (records.some(record => record.header.id === sessionId) || await persistence.stat(sessionId) !== undefined) {
+        throw new RemoteError('session/delete-denied', 'Cleanup cannot delete an unrelated stored Session', { sessionId })
+      }
+      selected.add(sessionId)
+      ids.push(sessionId)
+    }
+    return this.agents.withDeletion(ids, async () => {
+      for (const sessionId of ids) {
+        const activity = await this.ctx.waterfall('workspace/session-activity', { sessionId }, () => Promise.resolve([]))
+        if (activity.length > 0) {
+          throw new RemoteError('session/delete-active', 'Stop this Session and its tasks before deleting it', { sessionId })
+        }
+      }
+      await this.agents.releaseForDeletion(ids)
+      let deletedSessionIds = ids.toReversed()
+      let storageFailure: unknown
+      try {
+        await persistence.deleteMany(deletedSessionIds)
+      } catch (error: unknown) {
+        if (error instanceof SessionAlreadyOwnedError) {
+          throw new RemoteError('session/writer-held', 'Another process is using this Session', {
+            sessionId: error.sessionId,
+          }, { cause: error })
+        }
+        deletedSessionIds = error instanceof SessionDeletionError ? [...error.deletedSessionIds] : []
+        storageFailure = error
+      }
+      const cleanupFailures: unknown[] = []
+      for (const sessionId of deletedSessionIds) {
+        this.ctx.emit('api-session/deleted', sessionId)
+        const results = await Promise.allSettled([
+          this.ctx.workspaceRegistry.forgetSession(sessionId),
+          this.ctx.get('sessionProjectionCache')?.remove(sessionId),
+          this.ctx.sessionQuery.forgetSession(sessionId),
+        ])
+        for (const result of results) if (result.status === 'rejected') cleanupFailures.push(result.reason)
+      }
+      if (cleanupFailures.length > 0) {
+        throw new RemoteError('session/delete-failed', 'Session metadata cleanup did not finish; retry the deletion', {
+          sessionId: request.sessionId, deletedSessionIds,
+        }, { cause: new AggregateError(storageFailure === undefined ? cleanupFailures : [storageFailure, ...cleanupFailures]) })
+      }
+      if (storageFailure !== undefined) {
+        throw new RemoteError('session/delete-failed', 'Session deletion did not finish; retry the deletion', {
+          sessionId: request.sessionId, deletedSessionIds,
+        }, { cause: storageFailure })
+      }
+      return { deletedSessionIds }
+    })
   }
 
   /**

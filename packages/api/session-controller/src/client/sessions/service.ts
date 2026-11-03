@@ -400,6 +400,14 @@ export class ClientSessions implements ISessions {
   }
 
   /**
+   * Permanently remove a history identity from the Client catalog.
+   * @param sessionId - deleted Session identity.
+   */
+  handleSessionDeleted(sessionId: SessionId): void {
+    this.manager.handleSessionDeleted(sessionId)
+  }
+
+  /**
    * Apply one remotely forwarded running-state change.
    * @param args - Session identity and current Agent running state.
    */

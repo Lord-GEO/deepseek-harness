@@ -413,6 +413,13 @@ abstract searchEvents( request: SessionEventSearchRequest, exec?: SessionSearchE
 listSessions(signal?: AbortSignal): Promise<SessionRecord[]>
 
 /**
+ * Remove derived history retained for a deleted Session.
+ * @param id - Session whose runtime and stored log have already been removed.
+ * @returns completion after backend index cleanup; safe to retry.
+ */
+forgetSession(id: SessionId): Promise<void>
+
+/**
  * Read and replay-validate one complete logical session log without making it live.
  * @param sessionId - live or persisted session id to read.
  * @returns cloned header and complete raw event log from one observation.

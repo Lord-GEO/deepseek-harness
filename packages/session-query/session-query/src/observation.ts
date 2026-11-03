@@ -80,6 +80,14 @@ export class SessionObservationReader {
   private readonly cache = new Map<SessionId, PreparedEntry>()
 
   /**
+   * Drop reusable prepared history after persistent deletion; existing leases remain caller-owned.
+   * @param id - deleted Session identity.
+   */
+  forget(id: SessionId): void {
+    this.cache.delete(id)
+  }
+
+  /**
    * @param ctx - context carrying Session and optional persistence/projection services.
    * @param cacheCapacity - maximum unpinned cold observations retained for reuse.
    */

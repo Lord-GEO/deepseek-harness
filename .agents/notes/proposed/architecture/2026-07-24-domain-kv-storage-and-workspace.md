@@ -11,9 +11,9 @@ The host's only persistence surface is the session event log (`packages/session/
 - **The workspace entity.** The GUI needs workspace as a real object: path, title, and the list of owned sessions. Ownership belongs to the workspace — "which sessions belong to this workspace" is not any single session's fact, so writing it into the session log is semantically wrong. Before this design, workspace was only a sidebar visual grouping derived from cwd, with no entity.
 - **Dynamic session metadata** (the foreseeable second consumer). Cold session listings read only the first log line (an immutable creation-time snapshot); title, terminal status, and anything that evolves with the session is unavailable. The fix direction is a sidecar metadata table — exactly a KV table with high-frequency per-key updates.
 
-Separately, Session deletion needs a `SessionPersistence` delete primitive and a `session.delete` endpoint. That gap's design is settled in this note, but its implementation remains future work.
+Session storage deletion, API, and GUI behavior are owned by the [permanent Session deletion decision](../../implemented/feature/2026-11-04-permanent-session-deletion.md).
 
-The [Workspace reference](../../../../packages/workspace/workspace/README.md) defines non-destructive registration removal: deleting a Workspace registration preserves its Sessions and their logs, while Session deletion remains separate future work. The cascade design below is therefore not the Workspace GUI delete semantic.
+The [Workspace reference](../../../../packages/workspace/workspace/README.md) defines non-destructive registration removal: deleting a Workspace registration preserves its Sessions and their logs, while Session deletion is a separate operation. Session deletion is not the Workspace GUI delete semantic.
 
 ## Proposal
 
@@ -26,12 +26,12 @@ Create the `packages/storage/` group — the `ctx.storage` hub (backend registry
 | `@deepseek-ai/dsh-storage-sqlite` | `packages/storage/storage-sqlite/` | registers backend `sqlite` | ✓ |
 | `@deepseek-ai/dsh-storage-domain` | `packages/storage/storage-domain/` | mounts `ctx.storage.domain` | ✓ |
 | `@deepseek-ai/dsh-workspace` | `packages/workspace/workspace/` | `ctx.workspaceRegistry` | ✓ |
-| `SessionPersistence.delete` extension + cascade orchestration | `packages/session/session-persistence*` | new method on the existing seam | ✗ future work (session side untouched this phase) |
+| Session deletion and descendant orchestration | `packages/session/session-persistence*`, `packages/api/session-controller` | `deleteMany`, `session.delete` | owned by the [separate deletion decision](../../implemented/feature/2026-11-04-permanent-session-deletion.md) |
 | `workspace.*` / `session.delete` RPC, GUI wiring, boot assembly | — | — | ✗ next phase |
 
 (workspace lives in its own group rather than `packages/host/`: the host group's naming rule requires the `dsh-host-*` prefix while this package is named `dsh-workspace`; and the workspace entity is a domain concept, not bound to the host assembly tier. Unrelated to the existing `agent-instructions` package — that is an AGENTS.md instruction loader.)
 
-Dependency direction: `dsh-workspace` → `dsh-domain` → `dsh-storage` ← the two backends. `dsh-workspace` additionally depends on the read-only face of `ctx.sessionPersistence` (attach's cwd check reads the session header; when the service is absent, attach rejects outright — no verification, no bookkeeping). The `ctx.sessions` running-check for session deletion moves into future work together with the cascade.
+Dependency direction: `dsh-workspace` → `dsh-domain` → `dsh-storage` ← the two backends. `dsh-workspace` additionally depends on the read-only face of `ctx.sessionPersistence` (attach's cwd check reads the session header; when the service is absent, attach rejects outright — no verification, no bookkeeping). Session runtime ownership and activity checks belong to the separate deletion decision.
 
 ### `dsh-storage`: the storage hub
 
@@ -162,34 +162,9 @@ Rules:
 - **Version compatibility**: the domain owner declares readable older versions through `compatibleVersions` and decodes historical values with its current schemas. Storage does not convert record values; [domain versioning](../../../../docs/subsystems/storage.md#domain-versioning) defines stamp publication and mixed-generation requirements.
 - **Change events**: after each write's durability resolves, emit `domain/changed` (`@mode emit`), one per record, no old value (matching the repository's "new snapshot + operation discriminant" convention, template `goal/changed`); the payload `DomainChanged` is a put/deleted discriminated union — domain + table + key (both `''` for global changes) + operation, with the put branch carrying the new snapshot value and the deleted branch carrying none (`packages/storage/storage-domain/src/events.ts`). This is next phase's RPC push-frame event source. The error vocabulary is `DomainError`, codes: `already-open` / `facet-unsupported` / `invalid-record` (with `{ table, key }`) / `missing-key` / `closed`.
 
-### Future work: session-side deletion (design settled, not implemented this phase)
+### Session deletion
 
-This section is the settled construction spec; the implementation phase changes code only, not semantics. No session-persistence file is modified this phase.
-
-```ts ignore-check
-export abstract class SessionPersistence extends Service {
-  /**
-   * Permanently delete one session's stored log.
-   * Queued on the per-id write chain (serialized with in-flight appends).
-   * Unknown id → reject; un-materialized create intent → cancel it and resolve.
-   * After deletion the id behaves as unknown for every subsequent operation.
-   */
-  abstract delete(id: SessionId): Promise<void>
-}
-```
-
-- JSONL backend: unlink the session's file (including the `.zstd` variant); neither file nor intent → reject.
-- An out-of-tree backend deletes atomically in its own medium and preserves the same unknown-id and canceled-intent results; this proposal defines no other first-party physical path.
-- After a successful delete, emit `'session-persistence/deleted'(id: SessionId)` (`@mode emit`; the session-persistence event surface, unrelated to `domain/changed`). Derived data (the session-query full-text index and the like) subscribes and cleans itself; the persistence layer never reaches into indexes, and the crash window is covered by derived indexes being droppable-and-rebuildable.
-
-Orchestration rules (implemented together with the cascade; the `session.delete` RPC and the workspace cascade reuse the same rules):
-
-| Check (in order) | On failure |
-| --- | --- |
-| No target (the whole subtree when recursive) is running in `ctx.sessions` | throw, delete nothing; callers cancel first then delete — the persistence layer never reaches back into the runtime |
-| Non-recursive: the target has no descendants (descendants = the `parentSessionId` transitive closure, derived from `list()` headers) | throw: by default only leaves are deletable; `recursive: true` opts into recursion |
-| Recursive order is bottom-up (leaves → root) | — a mid-way crash leaves only "half the subtree deleted, ancestors intact"; re-running the same delete converges, and no dangling parent exists at any moment |
-| Some id in the cascade is already gone from disk | skip (idempotent resumption); any other error aborts |
+Session deletion is owned by the [permanent Session deletion decision](../../implemented/feature/2026-11-04-permanent-session-deletion.md); the remaining storage-migration decisions in this proposal stay independent.
 
 ### `dsh-workspace`
 
@@ -244,7 +219,7 @@ export class WorkspaceRegistry extends Service {
 - **Path canon**: the stored value = `fs.realpath(input)` (trailing slashes, `..`, and symlinks all resolved); uniqueness = string equality after normalization (a symlink resolving to the same directory counts as a collision). A missing directory makes create reject outright (realpath fails — a workspace must point at an existing directory; "Create new = make the directory" is upper-layer interaction: mkdir first, then create). The session cwd in attach checks follows the same canon. Single-valued cwd + unique path ⇒ one session structurally belongs to at most one workspace; double bookkeeping is impossible on the write side.
 - **Title**: a display name, defaults to `basename(path)`, mutable, duplicates allowed. Ownership is never derived from cwd as a fallback — cwd cannot express ordering, and ownership is a workspace-side fact; sessions started headless belong to no workspace.
 - Consumers see only the `Workspace` interface; `WorkspaceEntity` stays inside the package (a single implementation does not pre-split a seam). Entities are unique per id (registry cache); the record snapshot is swapped in place after each write, and the outside sees getters only. Every write funnels through the entity's internal `mutate(fn)` → `table.update`, with `updatedAt` refreshed inside mutate. Domain objects never cross RPC; next phase the wire layer projects records into zod wire schemas.
-- **Session deletion remains future work.** The [Workspace registry](../../../../packages/workspace/workspace/README.md) provides `ctx.workspaceRegistry.delete(id)` as a metadata-only operation that preserves Sessions and logs. Recursive Session deletion, running checks, and crash-rerun convergence belong to a separate `session.delete` capability.
+- **Session deletion is separate from Workspace removal.** The [permanent deletion decision](../../implemented/feature/2026-11-04-permanent-session-deletion.md) owns descendant orchestration, activity checks, and partial failures; Workspace registration removal preserves histories.
 
 Consistency doctrine (the ledger = the only ownership authority; the implementation and test baseline):
 
@@ -286,7 +261,6 @@ Snapshots: no model-visible or assembly surface this phase, none added; next pha
 
 | Not doing | Trigger | Rework point | Groundwork |
 | --- | --- | --- | --- |
-| Session deletion (`SessionPersistence.delete`, the deleted event, recursive delete, running checks) | a destructive Session-delete product flow starts | implement the session primitive plus `session.delete`; keep it independent from Workspace registration deletion | orchestration rules and rejection table above remain groundwork; Workspace deletion preserves Sessions and logs |
 | The `log` facet and Session-provider migration | any phase after this one | sink JSONL medium operations when a real consumer justifies the facet | the facet organization leaves the option open without committing to extraction |
 | Multi-process write protection | two host processes writing one medium | JSON backend file locks; SQLite WAL is natively multi-process | all writes already funnel through the domain's single point; locking touches backends only |
 | Cross-process change observation | GUI reconnect awareness | the revision pattern (copy session-persistence) | `domain/changed` already exists in-process |
@@ -297,7 +271,6 @@ Snapshots: no model-visible or assembly surface this phase, none added; next pha
 | Cross-table atomic transactions | one business operation touching two tables of one domain atomically | `domain.transact(fn)`; JSON whole-unit rewrite is naturally atomic, SQLite wraps a transaction | — |
 | Secondary indexes / conditional queries | in-memory filtering stops scaling (tens of thousands of records) | SQLite JSON1 over the value column, a read-only query facet on the seam | the JSON backend does not follow |
 | Moving a session across workspaces | a product need appears | relax the attach check into a "detach first, then attach" orchestration | — |
-| Session-delete RPC/GUI | a destructive Session-delete product flow starts | `session.delete` endpoint, wire schema, and explicit confirmation UI | Workspace RPC/GUI is shipped separately; no cascade coupling remains |
 
 ## Alternatives considered
 
@@ -319,7 +292,7 @@ Snapshots: no model-visible or assembly surface this phase, none added; next pha
 
 - This phase's four test suites all green: the shared backend contract suite on both json/sqlite, registry/mount disposer semantics, the domain layer (including the six open steps and fail-loud routing), and full workspace semantics (create/attach checks/consistency doctrine).
 - `ctx.workspaceRegistry` completes the create → attach → list → metadata-only delete lifecycle under a test assembly.
-- Zero diff in the session-persistence packages (the acceptance line for not touching the session side this phase).
+- Session deletion follows its separate owning decision; Workspace registration removal preserves histories.
 - No new snapshots this phase (no model-visible or assembly surface); added next phase with the RPC wiring.
 
 ## Risks

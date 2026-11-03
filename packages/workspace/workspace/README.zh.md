@@ -25,6 +25,8 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
+`forgetSession(id)` 从 Workspace 账本、全局归档与置顶集合以及缓存 header 中移除已删除的 Session。调用方先移除运行时与日志。清理会持久保存，并可在部分失败后重试；它不移除 Workspace 或项目文件。
+
 使用此包为产品提供项目列表：用户工作的命名目录、每个目录中运行的会话、稳定顺序，以及在不丢失会话的前提下将其隐藏或重新取回的能力。每项操作背后的 API 约定放在实现章节中。
 
 ### 何时使用

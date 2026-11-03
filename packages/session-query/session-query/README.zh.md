@@ -25,6 +25,8 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
+`forgetSession(id)` 在运行时与日志被移除后丢弃可复用的准备历史。现有观察租约在释放前仍由调用方持有。搜索提供方覆盖此方法以移除派生索引记录；会话删除 API 会等待该清理。
+
 当你需要读取或搜索会话历史、而不直接触碰会话服务或存储后端时，从应用代码使用 `ctx.sessionQuery`。该服务由具体后端插件提供——已发布组合挂载 `@deepseek-ai/dsh-session-query-sqlite`（[README](../session-query-sqlite/README.zh.md)）——因此本包从不单独挂载。一旦组合了后端，以下全部能力都可在 `ctx.sessionQuery` 上使用。
 
 ### 你可以做什么

@@ -27,6 +27,8 @@ Desktop analytics follows the [product collection policy](../../client/product-a
 <a id="use-this-package"></a>
 ## Use this package
 
+`session.delete` permanently removes an inactive ordinary Session and its subagent descendants, leaves first. It checks access and reported activity for every target before releasing API-owned Agents. Foreign runtime owners and kernel writer locks refuse deletion. Independent forks, shared attachments, and project files remain. Each removed identity emits `api-session/deleted`, then its Workspace metadata, projection checkpoints, prepared histories, and search index are cleaned. A failure reports `deletedSessionIds` through `session/delete-failed`; supply those identities as `cleanupSessionIds` when retrying, including when the root log is already absent. The GUI retains them until success. Active work fails as `session/delete-active`; the caller must stop it first.
+
 The controller reads a Session's recorded preset through the optional `agentPresets.presetForSession(session)` service method. A null result means no preset was recorded; an absent service means preset identity is unavailable to the controller.
 
 History pages and follow opening snapshots carry one `{ type: 'event', event: SessionWireEvent }` record per durable Session event. The Client retains each accepted record as one durable `SessionEventLikeEntry`; Assistant token boundaries remain inside the compact stream on `assistant/message` or `assistant/attempt`. Tool arguments, result content, failures, and `tool/result.data.meta` pass through unchanged; the controller does not resolve a Tool definition, run a presenter, or attach UI data.

@@ -101,6 +101,12 @@ export interface UiWorkspace {
    */
   unarchiveSession(sessionId: SessionId): Promise<void>
   /**
+   * Permanently delete an inactive Session tree and clear its main selection.
+   * @param sessionId - ordinary Session whose deletion the user confirmed.
+   * @returns Host completion and refreshed list; failures retain the current selection.
+   */
+  deleteSession(sessionId: SessionId): Promise<void>
+  /**
    * Pin a Session on the Host, then lead it in its accounts' saved orders
    * (its Workspace group or Ungrouped, and the flat list). The order write
    * reads the memberships current at completion, so reorders that landed
@@ -174,6 +180,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     {}, { persist: { name: 'dsh.sessions.current' } },
   )
   private mainReference: SessionReference | undefined
+  private readonly deletionCleanup = new Map<SessionId, readonly SessionId[]>()
   private restorationNavigation: AbortSignal | undefined
 
   /**
@@ -193,6 +200,9 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     private readonly notify: (toast: RowToast) => void,
   ) {
     super(ctx, 'uiWorkspace')
+    ctx.remote.$on('api-session/deleted', (sessionId) => {
+      if (this.mainReference?.sessionId === sessionId) this.clearMain()
+    })
     ctx.effect(() => {
       const stop = this.watchNavigation()
       return () => {
@@ -332,6 +342,29 @@ class UiWorkspaceService extends Service implements UiWorkspace {
       ...onCreated === undefined ? {} : { onCreated },
       ...options?.allowMigration === undefined ? {} : { allowMigration: options.allowMigration },
     })
+  }
+
+  async deleteSession(sessionId: SessionId): Promise<void> {
+    const cleanupSessionIds = this.deletionCleanup.get(sessionId)
+    const result = await this.ctx.remote.session.delete({
+      sessionId, ...cleanupSessionIds === undefined ? {} : { cleanupSessionIds },
+    })
+    if (!result.ok) {
+      const code = result.error.code
+      if (code === 'session/delete-failed') this.deletionCleanup.set(sessionId, result.error.details.deletedSessionIds)
+      const reason = code === 'session/delete-active' ? 'active'
+        : code === 'session/writer-held' ? 'busy'
+          : code === 'session/delete-denied' || code === 'remote-access/denied' ? 'denied'
+            : code === 'session/delete-failed' && result.error.details.deletedSessionIds.length > 0 ? 'partial' : 'failed'
+      this.notify({ kind: 'sessionDeleteFailed', reason })
+      throw new Error(result.error.message)
+    }
+    this.deletionCleanup.delete(sessionId)
+    if (this.mainReference !== undefined && result.value.deletedSessionIds.includes(this.mainReference.sessionId)) {
+      this.clearMain()
+    }
+    await this.sessions.refresh()
+    this.notify({ kind: 'sessionDeleted' })
   }
 
   startSession(workspaceId?: WorkspaceId, options?: StartSessionOptions): void {

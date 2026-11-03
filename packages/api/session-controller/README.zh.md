@@ -27,6 +27,8 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
+`session.delete` 从叶到根永久删除静止的普通 Session 及其子智能体后代。它在释放 API 持有的 Agent 前校验每个目标的访问权限与已报告活动。其他运行时所有者与内核写入锁会阻止删除。独立分叉的会话、共享附件和项目文件保留。每个已移除身份发出 `api-session/deleted`，随后清理 Workspace 元数据、投影检查点、准备历史与搜索索引。失败通过 `session/delete-failed` 报告 `deletedSessionIds`；重试时将这些身份作为 `cleanupSessionIds` 传回，以完成清理，包括根日志已不存在的情况；GUI 会保留这些身份直到成功。存在活动工作时以 `session/delete-active` 拒绝，调用方须先停止工作。
+
 控制器通过可选服务方法 `agentPresets.presetForSession(session)` 读取 Session 已记录的预设。null 结果表示未记录预设；服务缺席表示控制器无法获知预设身份。
 
 历史页与 follow opening 快照为每个持久 Session 事件携带一条 `{ type: 'event', event: SessionWireEvent }` record。Client 把每条已接受 record 保留为一个持久 `SessionEventLikeEntry`；Assistant token 边界保留在 `assistant/message` 或 `assistant/attempt` 的紧凑流内。工具参数、结果内容、失败信息和 `tool/result.data.meta` 原样通过；控制器不解析工具定义、不运行展示转换器，也不附加 UI 数据。

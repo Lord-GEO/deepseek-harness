@@ -386,6 +386,26 @@ abstract create(header: SessionHeader, options?: SessionPersistenceCreateOptions
 abstract open(id: SessionId, access: SessionAccess, options?: SessionPersistenceOpenOptions): Promise<SessionHandle>
 
 /**
+ * Permanently remove every stored generation of one Session. Callers must
+ * release its write handle first. Shared attachments are retained.
+ * @param id - stored Session to delete.
+ * @returns completion after removal; an unknown identity is an idempotent no-op.
+ * @throws {SessionAlreadyOwnedError} while a writer owns the Session.
+ */
+delete(id: SessionId): Promise<void>
+
+/**
+ * Remove an ordered set of logs after claiming every target's writer exclusion.
+ * No log is removed when any target is owned. Removal follows the supplied
+ * order; a later I/O failure can leave a partial deletion.
+ * @param ids - identities in deletion order, with descendants before parents.
+ * @returns completion; missing identities are successful no-ops.
+ * @throws {SessionAlreadyOwnedError} before any removal when a target is owned.
+ * @throws {SessionDeletionError} with removed identities after a partial failure.
+ */
+abstract deleteMany(ids: readonly SessionId[]): Promise<void>
+
+/**
  * Flush every active write handle owned by this service instance in one
  * durability barrier: each handle's routed live events drain durably and
  * its session materializes, exactly as that handle's own
@@ -420,6 +440,29 @@ abstract stat(id: SessionId, options?: SessionPersistenceStatOptions): Promise<S
  * @returns one snapshot per stored session.
  */
 abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
+```
+
+Types: [SessionId](core.zh.md)
+
+Source: [`packages/session/session-persistence/src/index.ts`](../../packages/session/session-persistence/src/index.ts)
+
+<a id="session-persistence-events"></a>
+
+### `session-persistence/*` events
+
+<a id="session-persistencedeleted--emit"></a>
+
+#### `session-persistence/deleted` — emit
+
+A stored Session's log was permanently removed.
+
+```ts cordis-catalog
+/**
+ * A stored Session's log was permanently removed.
+ * @mode emit
+ * @param id - deleted Session identity.
+ */
+'session-persistence/deleted'(id: SessionId): void
 ```
 
 Types: [SessionId](core.zh.md)

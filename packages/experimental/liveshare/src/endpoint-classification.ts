@@ -74,6 +74,7 @@ export const VIEWER_ENDPOINT_CLASSES = {
 
   // ── reader-child-rename ─────────────────────────────────────────────────────────────
   'session/rename': 'reader-child-rename', // the reader renames only its own visible child, never the source
+  'session/delete': 'owner-only',
 
   // ── always-allowed ───────────────────────────────────────────────────────────
   'remoteAccess/follow': 'always-allowed', // every Peer reads its own access snapshot before any policy

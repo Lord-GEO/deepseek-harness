@@ -727,6 +727,21 @@ export class SessionManager {
   }
 
   /**
+   * Remove a permanently deleted identity, including retained subagent metadata.
+   * @param sessionId - deleted Session identity.
+   */
+  handleSessionDeleted(sessionId: SessionId): void {
+    this.recordMutation({ kind: 'remove', sessionId })
+    this.sessions.get(sessionId)?.handleRemoved()
+    this.projectionInflight.get(sessionId)?.controller.abort()
+    this.projectionInflight.delete(sessionId)
+    this.projectionLoads.delete(sessionId)
+    this.projectionStores.delete(sessionId)
+    this.addresses.delete(sessionId)
+    this.engagedSessions.delete(sessionId)
+  }
+
+  /**
    * Apply one live Agent running-state change.
    * @param sessionId - Session whose Agent state changed.
    * @param running - current Agent running state.

@@ -25,6 +25,8 @@ Use this package to add ranked SQLite FTS5 search across session history, either
 <a id="use-this-package"></a>
 ## Use this package
 
+`forgetSession(id)` removes the deleted Session's prepared-history entry and both stored and live search documents on the index operation queue, then advances the search generation. An unopened index needs no cleanup; a failure is reported to the deletion caller and can be retried.
+
 Mount this package when a composition needs ranked full-text search over session history — for example the Web content search or `/resume` prior-work retrieval. The common path is explicit: mount the plugin, give it a dedicated database path, and call `ctx.sessionQuery.searchSessions` or `searchEvents` from code.
 
 ### When to choose it

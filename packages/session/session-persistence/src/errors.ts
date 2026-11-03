@@ -36,6 +36,18 @@ export class SessionAlreadyOwnedError extends Error {
   }
 }
 
+/** A deletion batch stopped after removing some Session logs. */
+export class SessionDeletionError extends Error {
+  /**
+   * @param deletedSessionIds - logs removed before the failure.
+   * @param cause - storage or lock-release failure; retry completes outstanding removal and metadata cleanup.
+   */
+  constructor(readonly deletedSessionIds: readonly SessionId[], cause: unknown) {
+    super('Session deletion did not finish', { cause })
+    this.name = 'SessionDeletionError'
+  }
+}
+
 /** A mutation (`append`/`flush`) was called on a read handle. */
 export class SessionReadOnlyError extends Error {
   /**

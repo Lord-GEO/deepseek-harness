@@ -2743,6 +2743,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the accepted title and durable event sequence.',
       },
       {
+        signature: '@Remote(\'delete\') async delete(request: SessionDeleteRequest): Promise<SessionDeleteValue>',
+        description: 'Permanently delete an inactive ordinary Session and its subagent descendants. Independent forks and shared attachments are retained. A failure after a descendant was removed reports those identities and can be retried.',
+        parameters: [{ name: 'request', description: 'ordinary Session whose history is removed after confirmation.' }],
+        returns: 'deleted identities, with descendants before their parent.',
+      },
+      {
         signature: '@Remote(\'fork\') async fork(request: SessionForkRequest): Promise<SessionForkValue>',
         description: 'Fork one cold-readable exact event prefix into a new Session. An omitted boundary selects the latest completed-turn prefix; an open cut receives synthetic fork closers.',
         parameters: [{ name: 'request', description: 'source Session, optional exact inclusive event boundary, and migration preflight choice.' }],
@@ -2892,6 +2898,20 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['{SessionPersistenceNotFoundError} when the session does not exist.', '{SessionAlreadyOwnedError} for `write` when ownership is taken.'],
       },
       {
+        signature: 'delete(id: SessionId): Promise<void>',
+        description: 'Permanently remove every stored generation of one Session. Callers must release its write handle first. Shared attachments are retained.',
+        parameters: [{ name: 'id', description: 'stored Session to delete.' }],
+        returns: 'completion after removal; an unknown identity is an idempotent no-op.',
+        throws: ['{SessionAlreadyOwnedError} while a writer owns the Session.'],
+      },
+      {
+        signature: 'abstract deleteMany(ids: readonly SessionId[]): Promise<void>',
+        description: 'Remove an ordered set of logs after claiming every target\'s writer exclusion. No log is removed when any target is owned. Removal follows the supplied order; a later I/O failure can leave a partial deletion.',
+        parameters: [{ name: 'ids', description: 'identities in deletion order, with descendants before parents.' }],
+        returns: 'completion; missing identities are successful no-ops.',
+        throws: ['{SessionAlreadyOwnedError} before any removal when a target is owned.', '{SessionDeletionError} with removed identities after a partial failure.'],
+      },
+      {
         signature: 'abstract flush(): Promise<void>',
         description: 'Flush every active write handle owned by this service instance in one durability barrier: each handle\'s routed live events drain durably and its session materializes, exactly as that handle\'s own `SessionHandle.flush` would. Read handles buffer nothing and are untouched. A handle closed concurrently counts as flushed — close itself drains durably.',
         parameters: [],
@@ -2936,10 +2956,16 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'all projection values at the event cut.',
       },
       {
-        signature: 'async write(session: Session): Promise<void>',
+        signature: 'write(session: Session): Promise<void>',
         description: 'Durably checkpoint one live session NOW (all mandatory points call this; tests and carriers may too). The registry cut is snapshotted at this boundary (states are live references), then the session\'s record is replaced on the domain\'s write chain. NOT fail-soft — callers on the fail-soft paths contain it.',
         parameters: [{ name: 'session', description: 'the live session to checkpoint.' }],
         returns: 'resolution after durability and event emission.',
+      },
+      {
+        signature: 'async remove(id: SessionId): Promise<void>',
+        description: 'Remove a deleted Session\'s checkpoint after its final writes settle.',
+        parameters: [{ name: 'id', description: 'Session whose runtime has already been disposed.' }],
+        returns: 'completion after durable removal.',
       },
       {
         signature: 'coldSnapshot( meta: SessionHeader, inheritedEventCount: SessionLogOffset, events: readonly SessionEvent[], ): ProjectionSnapshot',
@@ -3050,6 +3076,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'List the complete logical corpus using live-preferred records.',
         parameters: [{ name: 'signal', description: 'optional cancellation for persistence listing.' }],
         returns: 'deterministic newest-first cloned session records.',
+      },
+      {
+        signature: 'forgetSession(id: SessionId): Promise<void>',
+        description: 'Remove derived history retained for a deleted Session.',
+        parameters: [{ name: 'id', description: 'Session whose runtime and stored log have already been removed.' }],
+        returns: 'completion after backend index cleanup; safe to retry.',
       },
       {
         signature: 'async readSession(sessionId: SessionId): Promise<SessionLogSnapshot>',
@@ -4649,6 +4681,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'resolution after durability.',
       },
       {
+        signature: 'forgetSession(sessionId: SessionId): Promise<void>',
+        description: 'Remove a deleted Session\'s membership, pin, archive, and cached header.',
+        parameters: [{ name: 'sessionId', description: 'identity whose runtime and stored log have been removed.' }],
+        returns: 'completion after durable metadata cleanup; safe to repeat after partial cleanup.',
+      },
+      {
         signature: 'pinSession(sessionId: SessionId): Promise<void>',
         description: 'Pin one session durably, prepending it to the registry-global pin set. The session must exist (live or in session persistence) and must not be archived. An already pinned id resolves without writing or reordering.',
         parameters: [{ name: 'sessionId', description: 'The session to pin.' }],
@@ -4810,6 +4848,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     summary: 'A Session became visible or its Agent was created or disposed.',
     description: 'A Session became visible or its Agent was created or disposed. Consumers upsert the summary and replace its current running and availability state.',
     parameters: [{ name: 'summary', description: 'current list row for the Session.' }],
+  },
+  {
+    name: 'api-session/deleted',
+    mode: 'emit',
+    signature: '\'api-session/deleted\'(sessionId: SessionId): void',
+    summary: 'A Session\'s persistent history was permanently deleted.',
+    description: 'A Session\'s persistent history was permanently deleted.',
+    parameters: [{ name: 'sessionId', description: 'deleted identity, including cold Sessions.' }],
   },
   {
     name: 'api-session/error',
@@ -5162,6 +5208,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     summary: 'Restore a reminder\'s Session through its embedding\'s owning controller.',
     description: 'Restore a reminder\'s Session through its embedding\'s owning controller. Call next() to use the Web Session controller.',
     parameters: [{ name: 'sessionId', description: 'Original Session receiving the reminder.' }],
+  },
+  {
+    name: 'session-persistence/deleted',
+    mode: 'emit',
+    signature: '\'session-persistence/deleted\'(id: SessionId): void',
+    summary: 'A stored Session\'s log was permanently removed.',
+    description: 'A stored Session\'s log was permanently removed.',
+    parameters: [{ name: 'id', description: 'deleted Session identity.' }],
   },
   {
     name: 'session-telemetry/record',
@@ -8266,6 +8320,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionCreateValue',
     declaration: 'export interface SessionCreateValue {\n    readonly sessionId: SessionId;\n    readonly agentPreset?: string;\n}',
+  },
+  {
+    name: 'SessionDeleteRequest',
+    declaration: 'export interface SessionDeleteRequest {\n    readonly sessionId: SessionId;\n    readonly cleanupSessionIds?: readonly SessionId[];\n}',
+  },
+  {
+    name: 'SessionDeleteValue',
+    declaration: 'export interface SessionDeleteValue {\n    readonly deletedSessionIds: readonly SessionId[];\n}',
   },
   {
     name: 'SessionEndInput',

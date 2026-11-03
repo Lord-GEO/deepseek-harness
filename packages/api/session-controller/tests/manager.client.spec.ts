@@ -51,6 +51,18 @@ function makeManager(
 }
 
 describe('SessionManager instances', () => {
+  it('keeps deleted histories out of an in-flight list baseline', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    manager.handleSessionAdded(summary(S1))
+    const pending = Promise.withResolvers<ReturnType<typeof ok<{ items: ReturnType<typeof summary>[] }>>>()
+    remote.session.list.mockReturnValueOnce(pending.promise)
+    const refreshing = manager.refreshList()
+    manager.handleSessionDeleted(S1)
+    pending.resolve(ok({ items: [summary(S1), summary(S2)] }))
+    await refreshing
+    expect(manager.getListSnapshot().items.map(item => item.sessionId)).toEqual([S2])
+  })
   it.for(['event', 'list'] as const)(
     'forgets running when an unretained identity disappears through a %s',
     async (source, { mock, remote }) => {

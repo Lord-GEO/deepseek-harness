@@ -105,6 +105,8 @@ interface StoredSession {
 
 /** Minimal controllable persistence provider for service-level tests. */
 class TestPersistence extends SessionPersistence {
+  async deleteMany(): Promise<void> { throw new Error('deletion is not used by this fixture') }
+
   readonly durable = new Map<SessionId, StoredSession>()
   readFailure: Error | undefined
   appendFailure: Error | undefined

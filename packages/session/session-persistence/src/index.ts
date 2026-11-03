@@ -26,6 +26,7 @@ export type {
 export {
   SessionAlreadyExistsError,
   SessionAlreadyOwnedError,
+  SessionDeletionError,
   SessionFormatUnsupportedError,
   SessionHandleClosedError,
   SessionOwnershipLostError,
@@ -119,6 +120,14 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     sessionPersistence: SessionPersistence
   }
+  interface Events {
+    /**
+     * A stored Session's log was permanently removed.
+     * @mode emit
+     * @param id - deleted Session identity.
+     */
+    'session-persistence/deleted'(id: SessionId): void
+  }
 }
 
 /**
@@ -172,6 +181,28 @@ export abstract class SessionPersistence extends Service {
    * @throws {SessionAlreadyOwnedError} for `write` when ownership is taken.
    */
   abstract open(id: SessionId, access: SessionAccess, options?: SessionPersistenceOpenOptions): Promise<SessionHandle>
+
+  /**
+   * Permanently remove every stored generation of one Session. Callers must
+   * release its write handle first. Shared attachments are retained.
+   * @param id - stored Session to delete.
+   * @returns completion after removal; an unknown identity is an idempotent no-op.
+   * @throws {SessionAlreadyOwnedError} while a writer owns the Session.
+   */
+  delete(id: SessionId): Promise<void> {
+    return this.deleteMany([id])
+  }
+
+  /**
+   * Remove an ordered set of logs after claiming every target's writer exclusion.
+   * No log is removed when any target is owned. Removal follows the supplied
+   * order; a later I/O failure can leave a partial deletion.
+   * @param ids - identities in deletion order, with descendants before parents.
+   * @returns completion; missing identities are successful no-ops.
+   * @throws {SessionAlreadyOwnedError} before any removal when a target is owned.
+   * @throws {SessionDeletionError} with removed identities after a partial failure.
+   */
+  abstract deleteMany(ids: readonly SessionId[]): Promise<void>
 
   /**
    * Flush every active write handle owned by this service instance in one

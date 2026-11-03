@@ -944,6 +944,15 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
 @Remote('rename') rename(request: SessionRenameRequest): Promise<SessionRenameValue>
 
 /**
+ * Permanently delete an inactive ordinary Session and its subagent descendants.
+ * Independent forks and shared attachments are retained. A failure after a
+ * descendant was removed reports those identities and can be retried.
+ * @param request - ordinary Session whose history is removed after confirmation.
+ * @returns deleted identities, with descendants before their parent.
+ */
+@Remote('delete') async delete(request: SessionDeleteRequest): Promise<SessionDeleteValue>
+
+/**
  * Fork one cold-readable exact event prefix into a new Session. An omitted
  * boundary selects the latest completed-turn prefix; an open cut receives
  * synthetic fork closers.
@@ -1266,6 +1275,25 @@ A Session became visible or its Agent was created or disposed. Consumers upsert 
  */
 'api-session/added'(summary: SessionSummary): void
 ```
+
+Source: [`packages/api/session-controller/src/types.ts`](../../packages/api/session-controller/src/types.ts)
+
+<a id="api-sessiondeleted--emit"></a>
+
+#### `api-session/deleted` — emit
+
+A Session's persistent history was permanently deleted.
+
+```ts cordis-catalog
+/**
+ * A Session's persistent history was permanently deleted.
+ * @mode emit
+ * @param sessionId - deleted identity, including cold Sessions.
+ */
+'api-session/deleted'(sessionId: SessionId): void
+```
+
+Types: [SessionId](core.md)
 
 Source: [`packages/api/session-controller/src/types.ts`](../../packages/api/session-controller/src/types.ts)
 

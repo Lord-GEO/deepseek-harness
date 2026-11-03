@@ -191,6 +191,9 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     }
     'session/projections-unavailable': Record<string, never>
     'session/writer-held': { readonly sessionId: SessionId }
+    'session/delete-active': { readonly sessionId: SessionId }
+    'session/delete-denied': { readonly sessionId: SessionId }
+    'session/delete-failed': { readonly sessionId: SessionId; readonly deletedSessionIds: readonly SessionId[] }
     'session/agent-busy': { readonly reason: string }
     'session/invalid-time-zone': { readonly value: string }
     'session/workspace-attach-failed': { readonly sessionId: SessionId; readonly workspaceId: string }
@@ -289,6 +292,18 @@ export interface SessionSelectModelRequest extends ModelSelection {
 /** Accepted model selection after Host resolution. */
 export interface SessionSelectModelValue {
   readonly selected: ModelSelection
+}
+
+/** Permanent deletion of an ordinary Session and its subagent descendants. */
+export interface SessionDeleteRequest {
+  readonly sessionId: SessionId
+  /** Previously deleted identities reported by a failed attempt; only absent histories may be cleaned. */
+  readonly cleanupSessionIds?: readonly SessionId[]
+}
+
+/** Deleted identities, ordered from subagent descendants to their parent. */
+export interface SessionDeleteValue {
+  readonly deletedSessionIds: readonly SessionId[]
 }
 
 /** Session rename request. */
@@ -675,6 +690,12 @@ declare module '@deepseek-ai/cordis' {
      * @param sessionId - removed Session identity.
      */
     'api-session/removed'(sessionId: SessionId): void
+    /**
+     * A Session's persistent history was permanently deleted.
+     * @mode emit
+     * @param sessionId - deleted identity, including cold Sessions.
+     */
+    'api-session/deleted'(sessionId: SessionId): void
     /**
      * One Agent changed running state.
      * @mode emit

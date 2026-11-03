@@ -14,7 +14,7 @@ import {
   sessionFormatCatalog,
 } from '@deepseek-ai/dsh-session-format-catalog'
 import { readdirSync, type Dirent } from 'node:fs'
-import { open, mkdir, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
+import { open, mkdir, readdir, realpath, link, rm, stat, truncate, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
@@ -24,6 +24,7 @@ import {
   SessionPersistence, SessionPersistenceRevision, SessionFormatUnsupportedError,
   SessionPersistenceCorruptionError,
   SessionAlreadyExistsError, SessionPersistenceNotFoundError,
+  SessionDeletionError,
   assertStoredId, materializeCreateHeader, sessionFormatVersionRefusal, validateStoredEvents,
   type SessionAccess, type SessionHandle,
   type SessionHandleReadResult,
@@ -347,6 +348,54 @@ class JsonlSessionPersistence extends SessionPersistence {
   }
 
   // --- SessionPersistence service API ---
+
+  async deleteMany(ids: readonly SessionId[]): Promise<void> {
+    await this.ensureRootEncoding()
+    const claimed: SessionId[] = []
+    const leases: SessionWriteLease[] = []
+    const targets: Array<{ id: SessionId; dir: string }> = []
+    const deleted: SessionId[] = []
+    const failures: unknown[] = []
+    try {
+      for (const id of new Set(ids)) {
+        this.tracker.claimWrite(id)
+        claimed.push(id)
+      }
+      for (const id of claimed) {
+        const selected = await this.findLog(id)
+        if (selected === undefined) continue
+        const dir = dirname(selected.sourcePath)
+        leases.push(await this.acquireLease(id, undefined, dir))
+        targets.push({ id, dir })
+      }
+      for (const { id, dir } of targets) {
+        const generations = (await readdir(dir)).flatMap((filename) => {
+          const version = parseGenerationLogFilename(filename, this.compression)
+          return version === undefined ? [] : [{ filename, version }]
+        }).sort((left, right) => left.version - right.version)
+        // Predecessor removal reaches the directory barrier before the selected
+        // generation is unlinked, preventing resurrection after a POSIX crash.
+        for (const generation of generations) {
+          await unlink(join(dir, generation.filename))
+          if (generation === generations.at(-1)) deleted.push(id)
+          if (process.platform !== 'win32') await this.syncDirPosix(dir)
+        }
+        this.coldLogMemo.delete(id)
+        this.migrationPreparations.delete(id)
+        this.ctx.emit('session-persistence/deleted', id)
+      }
+    } catch (error: unknown) {
+      failures.push(error)
+    } finally {
+      const releases = await Promise.allSettled(leases.map(lease => lease.release()))
+      for (const release of releases) if (release.status === 'rejected') failures.push(release.reason)
+      for (const id of claimed) this.tracker.releaseClaim(id)
+    }
+    if (failures.length === 0) return
+    const cause = failures.length === 1 ? failures[0] : new AggregateError(failures, 'Session deletion and lock release failed')
+    if (deleted.length > 0) throw new SessionDeletionError(deleted, cause)
+    throw cause
+  }
 
   /**
    * Create a new stored session and take its write ownership. The session is

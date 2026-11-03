@@ -109,6 +109,7 @@ export class SessionProjectionCache extends Service {
 
   private table?: KvTable<SessionId, CheckpointRecord>
   private readonly dirty = new Map<Session, DirtyState>()
+  private readonly writes = new Map<SessionId, Set<Promise<void>>>()
 
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'sessionProjectionCache')
@@ -254,7 +255,31 @@ export class SessionProjectionCache extends Service {
    * @param session - the live session to checkpoint.
    * @returns resolution after durability and event emission.
    */
-  async write(session: Session): Promise<void> {
+  write(session: Session): Promise<void> {
+    const pending = this.writeCheckpoint(session)
+    const writes = this.writes.get(session.id) ?? new Set<Promise<void>>()
+    this.writes.set(session.id, writes)
+    writes.add(pending)
+    const settled = (): void => {
+      writes.delete(pending)
+      if (writes.size === 0) this.writes.delete(session.id)
+    }
+    void pending.then(settled, settled)
+    return pending
+  }
+
+  /**
+   * Remove a deleted Session's checkpoint after its final writes settle.
+   * @param id - Session whose runtime has already been disposed.
+   * @returns completion after durable removal.
+   */
+  async remove(id: SessionId): Promise<void> {
+    const writes = this.writes.get(id)
+    if (writes !== undefined) await Promise.allSettled([...writes])
+    await this.requireTable().delete(id)
+  }
+
+  private async writeCheckpoint(session: Session): Promise<void> {
     const rows = this.ctx.sessionProjections.checkpoint(session)
     this.markClean(session)
     // Durability barrier: the checkpoint cut was taken above, so flushing

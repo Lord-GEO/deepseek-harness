@@ -1,0 +1,6 @@
+- dialog "Delete session":
+  - heading "Delete session" [level=2]
+  - button "Close"
+  - paragraph: Permanently delete “Delete this conversation” and its subagent histories? This cannot be undone. Independent forks, shared attachments, and project files are kept.
+  - button "Cancel"
+  - button "Delete"

@@ -290,7 +290,14 @@ hydratePrepared( session: Session, events: readonly SessionEvent[], ): Projectio
  * @param session - the live session to checkpoint.
  * @returns resolution after durability and event emission.
  */
-async write(session: Session): Promise<void>
+write(session: Session): Promise<void>
+
+/**
+ * Remove a deleted Session's checkpoint after its final writes settle.
+ * @param id - Session whose runtime has already been disposed.
+ * @returns completion after durable removal.
+ */
+async remove(id: SessionId): Promise<void>
 
 /**
  * Cold-read one session's projections from its complete log. Each unit is
@@ -308,7 +315,7 @@ async write(session: Session): Promise<void>
 coldSnapshot( meta: SessionHeader, inheritedEventCount: SessionLogOffset, events: readonly SessionEvent[], ): ProjectionSnapshot
 ```
 
-Types: [Session](session.zh.md) · [SessionEvent](session.zh.md) · [SessionHeader](persistence.zh.md) · [SessionLogOffset](session.zh.md)
+Types: [Session](session.zh.md) · [SessionEvent](session.zh.md) · [SessionHeader](persistence.zh.md) · [SessionId](core.zh.md) · [SessionLogOffset](session.zh.md)
 
 Source: [`packages/session/session-projection-cache/src/index.ts`](../../packages/session/session-projection-cache/src/index.ts)
 

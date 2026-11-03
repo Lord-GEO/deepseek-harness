@@ -561,6 +561,13 @@ archiveSession(sessionId: SessionId, options: ArchiveSessionOptions = {}): Promi
 unarchiveSession(sessionId: SessionId): Promise<void>
 
 /**
+ * Remove a deleted Session's membership, pin, archive, and cached header.
+ * @param sessionId - identity whose runtime and stored log have been removed.
+ * @returns completion after durable metadata cleanup; safe to repeat after partial cleanup.
+ */
+forgetSession(sessionId: SessionId): Promise<void>
+
+/**
  * Pin one session durably, prepending it to the registry-global pin set.
  * The session must exist (live or in session persistence) and must not be
  * archived. An already pinned id resolves without writing or reordering.

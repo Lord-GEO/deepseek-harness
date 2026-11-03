@@ -25,6 +25,8 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
+`forgetSession(id)` 在索引操作队列中移除已删除 Session 的准备历史条目以及持久与实时搜索文档，随后推进搜索代际。尚未打开的索引无需清理；失败会报告给删除调用方，并可重试。
+
 当组合需要对会话历史进行排序后的全文搜索时——例如 Web 内容搜索或 `/resume` 既往工作检索——挂载本包。常用路径是显式的：挂载插件、给它一个专用数据库路径，然后从代码调用 `ctx.sessionQuery.searchSessions` 或 `searchEvents`。
 
 ### 何时选择

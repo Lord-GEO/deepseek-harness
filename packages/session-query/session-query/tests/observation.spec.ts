@@ -489,6 +489,8 @@ describe('SessionObservationReader cold path', () => {
     }
 
     class SwapPersistence extends SessionPersistence {
+      async deleteMany(): Promise<void> { throw new Error('deletion is not used by this fixture') }
+
       static readCalls = 0
 
       create(): Promise<SessionHandle> {

@@ -324,6 +324,8 @@ export type SessionRowActionProps<Injected extends object = object> =
 export type RowToast =
   | { kind: 'archived'; sessionId: SessionId }
   | { kind: 'stoppedAndArchived'; sessionId: SessionId }
+  | { kind: 'sessionDeleted' }
+  | { kind: 'sessionDeleteFailed'; reason: 'active' | 'busy' | 'denied' | 'partial' | 'failed' }
   | { kind: 'sessionIdCopied' }
   | { kind: 'sessionIdCopyFailed' }
   | { kind: 'pinFailed' }
@@ -427,6 +429,31 @@ export interface RenameSessionInjected {
   /** Ask for the rename dialog, seeded with the row's current title. */
   requestSessionRename: (sessionId: SessionId, currentTitle: string) => void
 }
+
+/** Permanent deletion action raised from a Session menu. */
+export interface DeleteSessionInjected {
+  /** Open confirmation for the captured Session without navigating to it. */
+  requestSessionDelete: (sessionId: SessionId, displayTitle: string) => void
+}
+
+/** Confirmation for an irreversible Session-history deletion. */
+export interface SessionDeleteDialogInjected {
+  hooks: {
+    /** Target awaiting confirmation, or null. */
+    deleteRequest: HostObservable<{ sessionId: SessionId; displayTitle: string } | null>
+  }
+  /** Dismiss the confirmation. */
+  settleSessionDelete: () => void
+  /** Delete the inactive Session and report the result through the global toast. */
+  deleteSession: (sessionId: SessionId) => Promise<void>
+}
+
+/** Props of the permanent-deletion confirmation overlay. */
+export type SessionDeleteDialogProps =
+  PropsRuntime<'shell.overlay'>
+  & PropsLocale<'workspace'>
+  & Omit<SessionDeleteDialogInjected, 'hooks'>
+  & PropsHooks<SessionDeleteDialogInjected['hooks']>
 
 /** Session ID action share; copying does not open the Session. */
 export interface SessionIdInjected {

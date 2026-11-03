@@ -129,6 +129,8 @@ class TestHandle implements SessionHandle {
 }
 
 class TestPersistence extends SessionPersistence {
+  async deleteMany(): Promise<void> { throw new Error('deletion is not used by this fixture') }
+
   static entries = new Map<SessionIdType, { meta: SessionHeader; events: SessionEvent[] }>()
   static revisions = new Map<SessionIdType, number>()
   static nextRevision = 0
